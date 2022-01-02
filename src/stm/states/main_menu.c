@@ -12,6 +12,7 @@
 JEL_Entity img;
 JEL_Entity text;
 JEL_Entity flower;
+JEL_Entity petal_e[5];
 
 int petals;
 int img_state;
@@ -30,6 +31,7 @@ static int main_menu_fn_create(struct STM_S *state)
 {
   srand(time(NULL));
   petals = rand() % (RAND_MAX - 1) ? 5 : 4;
+  for (int i = 0; i < 5; ++i) petal_e[i] = 0;
   img_state = 0;
   img = JEL_entity_create();
   JEL_SET(img, Position, 64, 64);
@@ -49,6 +51,7 @@ static int main_menu_fn_destroy(struct STM_S *state)
   JEL_entity_destroy(img);
   JEL_entity_destroy(text);
   JEL_entity_destroy(flower);
+  for (int i = 0; i < 5; ++i) JEL_entity_destroy(petal_e[i]);
 
   return 0;
 }
@@ -63,10 +66,10 @@ static int main_menu_fn_update(struct STM_S *state)
       JEL_SET(text, Sprite, 0, 600 + 200 * img_state, 124, 0, 410, 600 + 200 * img_state, 124);
       JEL_SET(flower, Sprite, 0, FD(0), FD(1), FD(2), FD(3), FD(4), FD(5));
     
-      JEL_Entity petal = JEL_entity_create();
-      JEL_SET(petal, Position, 512, 96);
-      JEL_SET(petal, Sprite, 1, 105, 113, 860, 64, 105, 113);
-      JEL_SET(petal, Physics, 0, 0, 0, 2);
+      petal_e[petals] = JEL_entity_create();
+      JEL_SET(petal_e[petals], Position, 512, 96);
+      JEL_SET(petal_e[petals], Sprite, 1, 105, 113, 860, 64, 105, 113);
+      JEL_SET(petal_e[petals], Physics, 0, 0, 0, 2);
     }
     else {
       JIN_stm_queue("DUMMY", 0);
