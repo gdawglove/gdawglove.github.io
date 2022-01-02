@@ -207,7 +207,7 @@ Module['FS_createPath']("/res", "sounds", true, true);
     }
   
    }
-   loadPackage({"files": [{"filename": "/res/images/spritesheet.png", "start": 0, "end": 254778}, {"filename": "/res/models/square.mdld", "start": 254778, "end": 254906}, {"filename": "/res/shaders/sprite_f.glsl", "start": 254906, "end": 255221}, {"filename": "/res/shaders/sprite.shdr", "start": 255221, "end": 255259}, {"filename": "/res/shaders/sprite_v.glsl", "start": 255259, "end": 255499}, {"filename": "/res/sounds/L.wav", "start": 255499, "end": 5611097, "audio": 1}], "remote_package_size": 5611097, "package_uuid": "fa1239e5-4630-4daf-815f-79f744f602d1"});
+   loadPackage({"files": [{"filename": "/res/images/spritesheet.png", "start": 0, "end": 254778}, {"filename": "/res/models/square.mdld", "start": 254778, "end": 254906}, {"filename": "/res/shaders/sprite_f.glsl", "start": 254906, "end": 255221}, {"filename": "/res/shaders/sprite.shdr", "start": 255221, "end": 255259}, {"filename": "/res/shaders/sprite_v.glsl", "start": 255259, "end": 255499}, {"filename": "/res/sounds/L.wav", "start": 255499, "end": 5611097, "audio": 1}], "remote_package_size": 5611097, "package_uuid": "be4d2535-6f63-4857-ad3d-a5a80684b96c"});
   
   })();
   
