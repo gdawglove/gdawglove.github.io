@@ -30,7 +30,7 @@ int flowerdata[] = {
 static int main_menu_fn_create(struct STM_S *state)
 {
   srand(time(NULL));
-  petals = rand() % (RAND_MAX - 1) ? 5 : 4;
+  petals = rand() % 100 ? 5 : 4;
   for (int i = 0; i < 5; ++i) petal_e[i] = 0;
   img_state = 0;
   img = JEL_entity_create();
