@@ -51,7 +51,7 @@ static int main_menu_fn_destroy(struct STM_S *state)
   JEL_entity_destroy(img);
   JEL_entity_destroy(text);
   JEL_entity_destroy(flower);
-  for (int i = 0; i < 5; ++i) JEL_entity_destroy(petal_e[i]);
+  for (int i = 0; i < 5 - !img_state; ++i) JEL_entity_destroy(petal_e[i]);
 
   return 0;
 }
