@@ -1,3 +1,0 @@
-/home/mihir/Coding/gdog/CMakeFiles/rebuild_cache.dir
-/home/mihir/Coding/gdog/CMakeFiles/edit_cache.dir
-/home/mihir/Coding/gdog/CMakeFiles/jin.dir
