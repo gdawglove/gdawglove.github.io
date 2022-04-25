@@ -46,7 +46,7 @@ var ENVIRONMENT_IS_NODE = typeof process == 'object' && typeof process.versions 
 var ENVIRONMENT_IS_SHELL = !ENVIRONMENT_IS_WEB && !ENVIRONMENT_IS_NODE && !ENVIRONMENT_IS_WORKER;
 
 if (Module['ENVIRONMENT']) {
-  throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -s ENVIRONMENT=web or -s ENVIRONMENT=node)');
+  throw new Error('Module.ENVIRONMENT has been deprecated. To force the environment, use the ENVIRONMENT compile-time option (for example, -sENVIRONMENT=web or -sENVIRONMENT=node)');
 }
 
 // `/` should be present at the end if `scriptDirectory` is not empty
@@ -198,20 +198,6 @@ if (ENVIRONMENT_IS_SHELL) {
 
   if (typeof quit == 'function') {
     quit_ = (status, toThrow) => {
-      // Unlike node which has process.exitCode, d8 has no such mechanism. So we
-      // have no way to set the exit code and then let the program exit with
-      // that code when it naturally stops running (say, when all setTimeouts
-      // have completed). For that reason we must call `quit` - the only way to
-      // set the exit code - but quit also halts immediately, so we need to be
-      // careful of whether the runtime is alive or not, which is why this code
-      // path looks different than node. It also has the downside that it will
-      // halt the entire program when no code remains to run, which means this
-      // is not friendly for bundling this code into a larger codebase, and for
-      // that reason the "shell" environment is mainly useful for testing whole
-      // programs by themselves, basically.
-      if (runtimeKeepaliveCounter) {
-        throw toThrow;
-      }
       logExceptionOnExit(toThrow);
       quit(status);
     };
@@ -338,7 +324,7 @@ var WORKERFS = 'WORKERFS is no longer included by default; build with -lworkerfs
 var NODEFS = 'NODEFS is no longer included by default; build with -lnodefs.js';
 function alignMemory() { abort('`alignMemory` is now a library function and not included by default; add it to your library.js __deps or to DEFAULT_LIBRARY_FUNCS_TO_INCLUDE on the command line'); }
 
-assert(!ENVIRONMENT_IS_SHELL, "shell environment detected but not enabled at build time.  Add 'shell' to `-s ENVIRONMENT` to enable.");
+assert(!ENVIRONMENT_IS_SHELL, "shell environment detected but not enabled at build time.  Add 'shell' to `-sENVIRONMENT` to enable.");
 
 
 
@@ -379,6 +365,16 @@ function warnOnce(text) {
 // include: runtime_functions.js
 
 
+// This gives correct answers for everything less than 2^{14} = 16384
+// I hope nobody is contemplating functions with 16384 arguments...
+function uleb128Encode(n) {
+  assert(n < 16384);
+  if (n < 128) {
+    return [n];
+  }
+  return [(n % 128) | 128, n >> 7];
+}
+
 // Wraps a JS function as a wasm function with a given signature.
 function convertJsFunctionToWasm(func, sig) {
 
@@ -406,8 +402,6 @@ function convertJsFunctionToWasm(func, sig) {
   // The module is static, with the exception of the type section, which is
   // generated based on the signature passed in.
   var typeSection = [
-    0x01, // id: section,
-    0x00, // length: 0 (placeholder)
     0x01, // count: 1
     0x60, // form: func
   ];
@@ -421,7 +415,7 @@ function convertJsFunctionToWasm(func, sig) {
   };
 
   // Parameters, length + signatures
-  typeSection.push(sigParam.length);
+  typeSection = typeSection.concat(uleb128Encode(sigParam.length));
   for (var i = 0; i < sigParam.length; ++i) {
     typeSection.push(typeCodes[sigParam[i]]);
   }
@@ -434,9 +428,12 @@ function convertJsFunctionToWasm(func, sig) {
     typeSection = typeSection.concat([0x01, typeCodes[sigRet]]);
   }
 
-  // Write the overall length of the type section back into the section header
-  // (excepting the 2 bytes for the section id and length)
-  typeSection[1] = typeSection.length - 2;
+  // Write the section code and overall length of the type section into the
+  // section header
+  typeSection = [0x01 /* Type section code */].concat(
+    uleb128Encode(typeSection.length),
+    typeSection
+  );
 
   // Rest of the module is static
   var bytes = new Uint8Array([
@@ -564,7 +561,7 @@ function ignoredModuleProp(prop) {
 function unexportedMessage(sym, isFSSybol) {
   var msg = "'" + sym + "' was not exported. add it to EXPORTED_RUNTIME_METHODS (see the FAQ)";
   if (isFSSybol) {
-    msg += '. Alternatively, forcing filesystem support (-s FORCE_FILESYSTEM=1) can export this for you';
+    msg += '. Alternatively, forcing filesystem support (-sFORCE_FILESYSTEM) can export this for you';
   }
   return msg;
 }
@@ -799,26 +796,26 @@ function allocate(slab, allocator) {
 
 // runtime_strings.js: Strings related runtime functions that are part of both MINIMAL_RUNTIME and regular runtime.
 
-// Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the given array that contains uint8 values, returns
-// a copy of that string as a Javascript String object.
-
 var UTF8Decoder = typeof TextDecoder != 'undefined' ? new TextDecoder('utf8') : undefined;
 
+// Given a pointer 'ptr' to a null-terminated UTF8-encoded string in the given array that contains uint8 values, returns
+// a copy of that string as a Javascript String object.
 /**
+ * heapOrArray is either a regular array, or a JavaScript typed array view.
  * @param {number} idx
  * @param {number=} maxBytesToRead
  * @return {string}
  */
-function UTF8ArrayToString(heap, idx, maxBytesToRead) {
+function UTF8ArrayToString(heapOrArray, idx, maxBytesToRead) {
   var endIdx = idx + maxBytesToRead;
   var endPtr = idx;
   // TextDecoder needs to know the byte length in advance, it doesn't stop on null terminator by itself.
   // Also, use the length info to avoid running tiny strings through TextDecoder, since .subarray() allocates garbage.
   // (As a tiny code save trick, compare endPtr against endIdx using a negation, so that undefined means Infinity)
-  while (heap[endPtr] && !(endPtr >= endIdx)) ++endPtr;
+  while (heapOrArray[endPtr] && !(endPtr >= endIdx)) ++endPtr;
 
-  if (endPtr - idx > 16 && heap.subarray && UTF8Decoder) {
-    return UTF8Decoder.decode(heap.subarray(idx, endPtr));
+  if (endPtr - idx > 16 && heapOrArray.buffer && UTF8Decoder) {
+    return UTF8Decoder.decode(heapOrArray.subarray(idx, endPtr));
   } else {
     var str = '';
     // If building with TextDecoder, we have already computed the string length above, so test loop end condition against that
@@ -827,16 +824,16 @@ function UTF8ArrayToString(heap, idx, maxBytesToRead) {
       // http://en.wikipedia.org/wiki/UTF-8#Description
       // https://www.ietf.org/rfc/rfc2279.txt
       // https://tools.ietf.org/html/rfc3629
-      var u0 = heap[idx++];
+      var u0 = heapOrArray[idx++];
       if (!(u0 & 0x80)) { str += String.fromCharCode(u0); continue; }
-      var u1 = heap[idx++] & 63;
+      var u1 = heapOrArray[idx++] & 63;
       if ((u0 & 0xE0) == 0xC0) { str += String.fromCharCode(((u0 & 31) << 6) | u1); continue; }
-      var u2 = heap[idx++] & 63;
+      var u2 = heapOrArray[idx++] & 63;
       if ((u0 & 0xF0) == 0xE0) {
         u0 = ((u0 & 15) << 12) | (u1 << 6) | u2;
       } else {
         if ((u0 & 0xF8) != 0xF0) warnOnce('Invalid UTF-8 leading byte 0x' + u0.toString(16) + ' encountered when deserializing a UTF-8 string in wasm memory to a JS string!');
-        u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heap[idx++] & 63);
+        u0 = ((u0 & 7) << 18) | (u1 << 12) | (u2 << 6) | (heapOrArray[idx++] & 63);
       }
 
       if (u0 < 0x10000) {
@@ -1225,8 +1222,8 @@ assert(typeof Int32Array != 'undefined' && typeof Float64Array !== 'undefined' &
        'JS engine does not provide full typed array support');
 
 // If memory is defined in wasm, the user can't provide it.
-assert(!Module['wasmMemory'], 'Use of `wasmMemory` detected.  Use -s IMPORTED_MEMORY to define wasmMemory externally');
-assert(INITIAL_MEMORY == 16777216, 'Detected runtime INITIAL_MEMORY setting.  Use -s IMPORTED_MEMORY to define wasmMemory dynamically');
+assert(!Module['wasmMemory'], 'Use of `wasmMemory` detected.  Use -sIMPORTED_MEMORY to define wasmMemory externally');
+assert(INITIAL_MEMORY == 16777216, 'Detected runtime INITIAL_MEMORY setting.  Use -sIMPORTED_MEMORY to define wasmMemory dynamically');
 
 // include: runtime_init_table.js
 // In regular non-RELOCATABLE mode the table is exported
@@ -1242,9 +1239,11 @@ var wasmTable;
 function writeStackCookie() {
   var max = _emscripten_stack_get_end();
   assert((max & 3) == 0);
-  // The stack grows downwards
-  HEAP32[((max + 4)>>2)] = 0x2135467;
-  HEAP32[((max + 8)>>2)] = 0x89BACDFE;
+  // The stack grow downwards towards _emscripten_stack_get_end.
+  // We write cookies to the final two words in the stack and detect if they are
+  // ever overwritten.
+  HEAP32[((max)>>2)] = 0x2135467;
+  HEAP32[(((max)+(4))>>2)] = 0x89BACDFE;
   // Also test the global address 0 for integrity.
   HEAP32[0] = 0x63736d65; /* 'emsc' */
 }
@@ -1252,8 +1251,8 @@ function writeStackCookie() {
 function checkStackCookie() {
   if (ABORT) return;
   var max = _emscripten_stack_get_end();
-  var cookie1 = HEAPU32[((max + 4)>>2)];
-  var cookie2 = HEAPU32[((max + 8)>>2)];
+  var cookie1 = HEAPU32[((max)>>2)];
+  var cookie2 = HEAPU32[(((max)+(4))>>2)];
   if (cookie1 != 0x2135467 || cookie2 != 0x89BACDFE) {
     abort('Stack overflow! Stack cookie has been overwritten, expected hex dwords 0x89BACDFE and 0x2135467, but received 0x' + cookie2.toString(16) + ' 0x' + cookie1.toString(16));
   }
@@ -1270,7 +1269,7 @@ function checkStackCookie() {
   var h16 = new Int16Array(1);
   var h8 = new Int8Array(h16.buffer);
   h16[0] = 0x6373;
-  if (h8[0] !== 0x73 || h8[1] !== 0x63) throw 'Runtime error: expected the system to be little-endian! (Run with -s SUPPORT_BIG_ENDIAN=1 to bypass)';
+  if (h8[0] !== 0x73 || h8[1] !== 0x63) throw 'Runtime error: expected the system to be little-endian! (Run with -sSUPPORT_BIG_ENDIAN to bypass)';
 })();
 
 // end include: runtime_assertions.js
@@ -1281,11 +1280,9 @@ var __ATEXIT__    = []; // functions called during shutdown
 var __ATPOSTRUN__ = []; // functions called after the main() is called
 
 var runtimeInitialized = false;
-var runtimeExited = false;
-var runtimeKeepaliveCounter = 0;
 
 function keepRuntimeAlive() {
-  return noExitRuntime || runtimeKeepaliveCounter > 0;
+  return noExitRuntime;
 }
 
 function preRun() {
@@ -1313,11 +1310,6 @@ function preMain() {
   checkStackCookie();
   
   callRuntimeCallbacks(__ATMAIN__);
-}
-
-function exitRuntime() {
-  checkStackCookie();
-  runtimeExited = true;
 }
 
 function postRun() {
@@ -1451,9 +1443,6 @@ function removeRunDependency(id) {
   }
 }
 
-Module["preloadedImages"] = {}; // maps url to image data
-Module["preloadedAudios"] = {}; // maps url to audio data
-
 /** @param {string|number=} what */
 function abort(what) {
   {
@@ -1497,7 +1486,7 @@ function abort(what) {
 // show errors on likely calls to FS when it was not included
 var FS = {
   error: function() {
-    abort('Filesystem support (FS) was not included. The problem is that you are using files from JS, but files were not used from C/C++, so filesystem support was not auto-included. You can force-include filesystem support with  -s FORCE_FILESYSTEM=1');
+    abort('Filesystem support (FS) was not included. The problem is that you are using files from JS, but files were not used from C/C++, so filesystem support was not auto-included. You can force-include filesystem support with -sFORCE_FILESYSTEM');
   },
   init: function() { FS.error() },
   createDataFile: function() { FS.error() },
@@ -1541,7 +1530,6 @@ function createExportWrapper(name, fixedasm) {
       asm = Module['asm'];
     }
     assert(runtimeInitialized, 'native function `' + displayName + '` called before runtime initialization');
-    assert(!runtimeExited, 'native function `' + displayName + '` called after runtime exit (use NO_EXIT_RUNTIME to keep it alive after main() exits)');
     if (!asm[name]) {
       assert(asm[name], 'exported native function `' + displayName + '` not found');
     }
@@ -1635,6 +1623,7 @@ function createWasm() {
     addOnInit(Module['asm']['__wasm_call_ctors']);
 
     removeRunDependency('wasm-instantiate');
+
   }
   // we can't run yet (except in a pthread, where we have a custom sync instantiator)
   addRunDependency('wasm-instantiate');
@@ -1703,6 +1692,7 @@ function createWasm() {
   // User shell pages can write their own Module.instantiateWasm = function(imports, successCallback) callback
   // to manually instantiate the Wasm module themselves. This allows pages to run the instantiation parallel
   // to any other async startup actions they are performing.
+  // Also pthreads and wasm workers initialize the wasm instance through this path.
   if (Module['instantiateWasm']) {
     try {
       var exports = Module['instantiateWasm'](info, receiveInstance);
@@ -1742,8 +1732,13 @@ var ASM_CONSTS = {
         var func = callback.func;
         if (typeof func == 'number') {
           if (callback.arg === undefined) {
+            // Run the wasm function ptr with signature 'v'. If no function
+            // with such signature was exported, this call does not need
+            // to be emitted (and would confuse Closure)
             getWasmTableEntry(func)();
           } else {
+            // If any function with signature 'vi' was exported, run
+            // the callback with that signature.
             getWasmTableEntry(func)(callback.arg);
           }
         } else {
@@ -1759,7 +1754,7 @@ var ASM_CONSTS = {
       return ret;
     }
   function demangle(func) {
-      warnOnce('warning: build with  -s DEMANGLE_SUPPORT=1  to link in libcxxabi demangling');
+      warnOnce('warning: build with -sDEMANGLE_SUPPORT to link in libcxxabi demangling');
       return func;
     }
 
@@ -1799,8 +1794,8 @@ var ASM_CONSTS = {
   function jsStackTrace() {
       var error = new Error();
       if (!error.stack) {
-        // IE10+ special cases: It does have callstack info, but it is only populated if an Error object is thrown,
-        // so try that as a special-case.
+        // IE10+ special cases: It does have callstack info, but it is only
+        // populated if an Error object is thrown, so try that as a special-case.
         try {
           throw new Error();
         } catch(e) {
@@ -1815,7 +1810,10 @@ var ASM_CONSTS = {
 
   function setWasmTableEntry(idx, func) {
       wasmTable.set(idx, func);
-      wasmTableMirror[idx] = func;
+      // With ABORT_ON_WASM_EXCEPTIONS wasmTable.get is overriden to return wrapped
+      // functions so we need to call it here to retrieve the potential wrapper correctly
+      // instead of just storing 'func' directly into wasmTableMirror
+      wasmTableMirror[idx] = wasmTable.get(idx);
     }
 
   function stackTrace() {
@@ -1833,7 +1831,7 @@ var ASM_CONSTS = {
     }
   
   function abortOnCannotGrowMemory(requestedSize) {
-      abort('Cannot enlarge memory arrays to size ' + requestedSize + ' bytes (OOM). Either (1) compile with  -s INITIAL_MEMORY=X  with X higher than the current value ' + HEAP8.length + ', (2) compile with  -s ALLOW_MEMORY_GROWTH=1  which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with  -s ABORTING_MALLOC=0 ');
+      abort('Cannot enlarge memory arrays to size ' + requestedSize + ' bytes (OOM). Either (1) compile with -sINITIAL_MEMORY=X with X higher than the current value ' + HEAP8.length + ', (2) compile with -sALLOW_MEMORY_GROWTH which allows increasing the size at runtime, or (3) if you want malloc to return NULL (0) instead of this abort, compile with -sABORTING_MALLOC=0');
     }
   function _emscripten_resize_heap(requestedSize) {
       var oldSize = HEAPU8.length;
@@ -1858,10 +1856,6 @@ var ASM_CONSTS = {
       },getStr:function(ptr) {
         var ret = UTF8ToString(ptr);
         return ret;
-      },get64:function(low, high) {
-        if (low >= 0) assert(high === 0);
-        else assert(high === -1);
-        return low;
       }};
   function _fd_close(fd) {
       abort('it should not be possible to operate on streams when !SYSCALLS_REQUIRE_FILESYSTEM');
@@ -2027,7 +2021,6 @@ unexportedRuntimeFunction('alignFunctionTables', false);
 unexportedRuntimeFunction('registerFunctions', false);
 unexportedRuntimeFunction('addFunction', false);
 unexportedRuntimeFunction('removeFunction', false);
-unexportedRuntimeFunction('getFuncWrapper', false);
 unexportedRuntimeFunction('prettyPrint', false);
 unexportedRuntimeFunction('dynCall', false);
 unexportedRuntimeFunction('getCompilerSetting', false);
@@ -2038,12 +2031,12 @@ unexportedRuntimeFunction('setTempRet0', false);
 unexportedRuntimeFunction('callMain', false);
 unexportedRuntimeFunction('abort', false);
 unexportedRuntimeFunction('keepRuntimeAlive', false);
+unexportedRuntimeFunction('ptrToString', false);
 unexportedRuntimeFunction('zeroMemory', false);
 unexportedRuntimeFunction('stringToNewUTF8', false);
 unexportedRuntimeFunction('abortOnCannotGrowMemory', false);
 unexportedRuntimeFunction('emscripten_realloc_buffer', false);
 unexportedRuntimeFunction('ENV', false);
-unexportedRuntimeFunction('withStackSave', false);
 unexportedRuntimeFunction('ERRNO_CODES', false);
 unexportedRuntimeFunction('ERRNO_MESSAGES', false);
 unexportedRuntimeFunction('setErrNo', false);
@@ -2059,9 +2052,7 @@ unexportedRuntimeFunction('Protocols', false);
 unexportedRuntimeFunction('Sockets', false);
 unexportedRuntimeFunction('getRandomDevice', false);
 unexportedRuntimeFunction('traverseStack', false);
-unexportedRuntimeFunction('convertFrameToPC', false);
 unexportedRuntimeFunction('UNWIND_CACHE', false);
-unexportedRuntimeFunction('saveInUnwindCache', false);
 unexportedRuntimeFunction('convertPCtoSourceLocation', false);
 unexportedRuntimeFunction('readAsmConstArgsArray', false);
 unexportedRuntimeFunction('readAsmConstArgs', false);
@@ -2074,10 +2065,6 @@ unexportedRuntimeFunction('autoResumeAudioContext', false);
 unexportedRuntimeFunction('dynCallLegacy', false);
 unexportedRuntimeFunction('getDynCaller', false);
 unexportedRuntimeFunction('dynCall', false);
-unexportedRuntimeFunction('callRuntimeCallbacks', false);
-unexportedRuntimeFunction('wasmTableMirror', false);
-unexportedRuntimeFunction('setWasmTableEntry', false);
-unexportedRuntimeFunction('getWasmTableEntry', false);
 unexportedRuntimeFunction('handleException', false);
 unexportedRuntimeFunction('runtimeKeepalivePush', false);
 unexportedRuntimeFunction('runtimeKeepalivePop', false);
@@ -2157,6 +2144,7 @@ unexportedRuntimeFunction('readI53FromI64', false);
 unexportedRuntimeFunction('readI53FromU64', false);
 unexportedRuntimeFunction('convertI32PairToI53', false);
 unexportedRuntimeFunction('convertU32PairToI53', false);
+unexportedRuntimeFunction('dlopenMissingError', false);
 unexportedRuntimeFunction('setImmediateWrapped', false);
 unexportedRuntimeFunction('clearImmediateWrapped', false);
 unexportedRuntimeFunction('polyfillSetImmediate', false);
@@ -2164,12 +2152,9 @@ unexportedRuntimeFunction('uncaughtExceptionCount', false);
 unexportedRuntimeFunction('exceptionLast', false);
 unexportedRuntimeFunction('exceptionCaught', false);
 unexportedRuntimeFunction('ExceptionInfo', false);
-unexportedRuntimeFunction('CatchInfo', false);
 unexportedRuntimeFunction('exception_addRef', false);
 unexportedRuntimeFunction('exception_decRef', false);
 unexportedRuntimeFunction('Browser', false);
-unexportedRuntimeFunction('funcWrappers', false);
-unexportedRuntimeFunction('getFuncWrapper', false);
 unexportedRuntimeFunction('setMainLoop', false);
 unexportedRuntimeFunction('wget', false);
 unexportedRuntimeFunction('FS', false);
@@ -2366,7 +2351,7 @@ function checkUnflushedContent() {
   err = oldErr;
   if (has) {
     warnOnce('stdio streams had content in them that was not flushed. you should set EXIT_RUNTIME to 1 (see the FAQ), or make sure to emit a newline when you printf etc.');
-    warnOnce('(this may also be due to not including full filesystem support - try building with -s FORCE_FILESYSTEM=1)');
+    warnOnce('(this may also be due to not including full filesystem support - try building with -sFORCE_FILESYSTEM)');
   }
 }
 
@@ -2374,20 +2359,12 @@ function checkUnflushedContent() {
 function exit(status, implicit) {
   EXITSTATUS = status;
 
-  // Skip this check if the runtime is being kept alive deliberately.
-  // For example if `exit_with_live_runtime` is called.
-  if (!runtimeKeepaliveCounter) {
-    checkUnflushedContent();
-  }
+  checkUnflushedContent();
 
-  if (keepRuntimeAlive()) {
-    // if exit() was called, we may warn the user if the runtime isn't actually being shut down
-    if (!implicit) {
-      var msg = 'program exited (with status: ' + status + '), but EXIT_RUNTIME is not set, so halting execution but not exiting the runtime or preventing further async execution (build with EXIT_RUNTIME=1, if you want a true shutdown)';
-      err(msg);
-    }
-  } else {
-    exitRuntime();
+  // if exit() was called explicitly, warn the user if the runtime isn't actually being shut down
+  if (keepRuntimeAlive() && !implicit) {
+    var msg = 'program exited (with status: ' + status + '), but EXIT_RUNTIME is not set, so halting execution but not exiting the runtime or preventing further async execution (build with EXIT_RUNTIME=1, if you want a true shutdown)';
+    err(msg);
   }
 
   procExit(status);
